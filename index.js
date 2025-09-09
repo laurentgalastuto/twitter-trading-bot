@@ -303,4 +303,86 @@ class TelegramService {
 console.log('🤖 Initializing TradingBot...');
 
 // BOT PRINCIPAL
-class TradingBot
+class TradingBot {
+  constructor() {
+    this.twitter = new TwitterService();
+    this.ai = new AIService();
+    this.telegram = new TelegramService();
+    console.log('TradingBot created');
+  }
+
+  async start() {
+    console.log('🤖 Bot started with RoBERTa AI!');
+    
+    try {
+      await this.telegram.sendStatus('Bot démarré avec IA RoBERTa ! 🧠🚀');
+      console.log('Startup message sent to Telegram');
+    } catch (error) {
+      console.error('Failed to send startup message:', error.message);
+    }
+    
+    // Check immediately
+    await this.checkTweets();
+    
+    // Then every 5 minutes
+    setInterval(() => {
+      this.checkTweets();
+    }, CONFIG.CHECK_INTERVAL);
+  }
+
+  async checkTweets() {
+    try {
+      console.log('🔍 Checking tweets...');
+      
+      const newTweets = await this.twitter.getLatestTweets();
+      
+      if (newTweets.length === 0) {
+        console.log('📭 No new tweets');
+        return;
+      }
+
+      console.log(`📨 Found ${newTweets.length} new tweets`);
+
+      for (const tweet of newTweets) {
+        const analysis = await this.ai.analyzeText(tweet.text);
+        
+        const signal = {
+          timestamp: new Date().toISOString(),
+          tweet_id: tweet.id,
+          tweet_text: tweet.text,
+          signal_type: analysis.signal,
+          confidence: analysis.confidence,
+          symbols: analysis.symbols,
+          reasoning: analysis.reasoning
+        };
+
+        signals.push(signal);
+
+        if (signal.confidence >= CONFIG.CONFIDENCE_THRESHOLD) {
+          await this.telegram.sendSignal(signal);
+        } else {
+          console.log(`⚠️ Low confidence: ${signal.confidence}%`);
+        }
+      }
+
+    } catch (error) {
+      console.error('💥 Error in checkTweets:', error.message);
+    }
+  }
+}
+
+console.log('🚀 Starting Express server...');
+
+// DÉMARRAGE
+const bot = new TradingBot();
+
+app.listen(PORT, () => {
+  console.log(`🚀 Bot running on port ${PORT}`);
+  
+  setTimeout(() => {
+    console.log('⏰ Starting bot in 2 seconds...');
+    bot.start();
+  }, 2000);
+});
+
+console.log('✅ Setup complete, waiting for server start...');

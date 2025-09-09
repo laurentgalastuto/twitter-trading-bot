@@ -1,22 +1,120 @@
-// SERVICE IA AVEC HUGGING FACE
+console.log('🚀 Starting bot...');
+
+require('dotenv').config();
+
+console.log('📋 Checking environment variables...');
+console.log('TWITTER_BEARER_TOKEN:', process.env.TWITTER_BEARER_TOKEN ? 'OK' : '❌ MISSING');
+console.log('TELEGRAM_BOT_TOKEN:', process.env.TELEGRAM_BOT_TOKEN ? 'OK' : '❌ MISSING');
+console.log('TELEGRAM_CHAT_ID:', process.env.TELEGRAM_CHAT_ID ? 'OK' : '❌ MISSING');
+console.log('HUGGINGFACE_API_KEY:', process.env.HUGGINGFACE_API_KEY ? 'OK' : '❌ MISSING');
+
+const express = require('express');
+const axios = require('axios');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+console.log('⚙️ Setting up configuration...');
+
+// Configuration
+const CONFIG = {
+  TWITTER_USER: 'Deltaone0',
+  CHECK_INTERVAL: 5 * 60 * 1000, // 5 minutes  
+  CONFIDENCE_THRESHOLD: 60,
+  MAX_TWEETS_CACHE: 50
+};
+
+// Stockage en mémoire
+let processedTweets = [];
+let signals = [];
+
+console.log('🌐 Setting up Express server...');
+
+// Keep-alive pour éviter sleep Render
+app.get('/', (req, res) => {
+  res.json({ 
+    status: '🤖 Bot Trading Running!',
+    uptime: Math.floor(process.uptime()),
+    lastCheck: new Date().toISOString(),
+    totalSignals: signals.length
+  });
+});
+
+console.log('📱 Initializing services...');
+
+// SERVICE TWITTER
+class TwitterService {
+  constructor() {
+    this.bearerToken = process.env.TWITTER_BEARER_TOKEN;
+    console.log('Twitter service initialized');
+  }
+
+  async getLatestTweets() {
+    try {
+      console.log('Fetching tweets from Twitter API...');
+      
+      // Get user ID
+      const userResponse = await axios.get(
+        `https://api.twitter.com/2/users/by/username/${CONFIG.TWITTER_USER}`,
+        { headers: { 'Authorization': `Bearer ${this.bearerToken}` }}
+      );
+      
+      const userId = userResponse.data.data.id;
+      
+      // Get tweets
+      const tweetsResponse = await axios.get(
+        `https://api.twitter.com/2/users/${userId}/tweets`,
+        {
+          headers: { 'Authorization': `Bearer ${this.bearerToken}` },
+          params: {
+            'max_results': 5,
+            'tweet.fields': 'created_at',
+            'exclude': 'retweets,replies'
+          }
+        }
+      );
+
+      const tweets = tweetsResponse.data.data || [];
+      return this.filterNewTweets(tweets);
+      
+    } catch (error) {
+      console.error('Twitter Error:', error.response?.status, error.message);
+      return [];
+    }
+  }
+
+  filterNewTweets(tweets) {
+    const processedIds = new Set(processedTweets.map(t => t.id));
+    const newTweets = tweets.filter(tweet => !processedIds.has(tweet.id));
+    
+    // Ajouter aux traités
+    newTweets.forEach(tweet => {
+      processedTweets.push({
+        id: tweet.id,
+        text: tweet.text,
+        created_at: tweet.created_at
+      });
+    });
+    
+    return newTweets;
+  }
+}
+
+// SERVICE IA
 class AIService {
   constructor() {
     this.apiKey = process.env.HUGGINGFACE_API_KEY;
     this.sentimentModel = 'cardiffnlp/twitter-roberta-base-sentiment-latest';
+    console.log('AI service initialized');
   }
 
   async analyzeText(text) {
     try {
-      // 1. Nettoyage du texte
+      console.log('🧠 Analyzing with RoBERTa...');
+      
       const cleanText = this.cleanText(text);
-      
-      // 2. Détection des symboles financiers
       const symbols = this.extractSymbols(text);
-      
-      // 3. Analyse du sentiment via Hugging Face RoBERTa
       const sentiment = await this.getSentimentHuggingFace(cleanText);
-      
-      // 4. Classification du signal basée sur IA + mots-clés
       const signal = this.classifySignal(cleanText, sentiment, symbols);
       
       return {
@@ -29,17 +127,15 @@ class AIService {
 
     } catch (error) {
       console.error('AI Analysis Error:', error.message);
-      
-      // Fallback: analyse basique si Hugging Face échoue
       return this.fallbackAnalysis(text);
     }
   }
 
   cleanText(text) {
     return text
-      .replace(/https?:\/\/[^\s]+/g, '') // URLs
-      .replace(/@[^\s]+/g, '') // Mentions
-      .replace(/#[^\s]+/g, '') // Hashtags
+      .replace(/https?:\/\/[^\s]+/g, '')
+      .replace(/@[^\s]+/g, '')
+      .replace(/#[^\s]+/g, '')
       .trim();
   }
 
@@ -51,8 +147,6 @@ class AIService {
 
   async getSentimentHuggingFace(text) {
     try {
-      console.log('🧠 Analyzing with RoBERTa...');
-      
       const response = await axios.post(
         `https://api-inference.huggingface.co/models/${this.sentimentModel}`,
         { inputs: text },
@@ -61,18 +155,18 @@ class AIService {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json'
           },
-          timeout: 10000 // 10 secondes timeout
+          timeout: 10000
         }
       );
 
       const result = response.data[0];
-      
-      // Conversion des labels RoBERTa en score -1 à 1
       const sentimentMap = {
-        'LABEL_0': -0.8, // Négatif
-        'LABEL_1': 0,    // Neutre  
-        'LABEL_2': 0.8   // Positif
+        'LABEL_0': -0.8,
+        'LABEL_1': 0,    
+        'LABEL_2': 0.8
       };
+
+      console.log(`✅ RoBERTa result: ${result.label}`);
 
       return {
         label: result.label,
@@ -82,8 +176,6 @@ class AIService {
 
     } catch (error) {
       console.error('Hugging Face API Error:', error.message);
-      
-      // Si erreur quota/API, utiliser analyse basique
       return { label: 'NEUTRAL', score: 0, confidence: 0.5 };
     }
   }
@@ -91,51 +183,33 @@ class AIService {
   classifySignal(text, sentiment, symbols) {
     const textLower = text.toLowerCase();
     
-    // Mots-clés trading
-    const bullishWords = [
-      'moon', 'pump', 'bull', 'buy', 'long', 'up', 'rise', 'surge',
-      'breakout', 'rally', 'bullish', 'calls', 'strength', 'momentum',
-      'hodl', 'diamond hands', 'ath', 'rocket'
-    ];
+    const bullishWords = ['moon', 'pump', 'bull', 'buy', 'long', 'up', 'rise', 'surge'];
+    const bearishWords = ['dump', 'bear', 'sell', 'short', 'down', 'fall', 'crash'];
     
-    const bearishWords = [
-      'dump', 'bear', 'sell', 'short', 'down', 'fall', 'crash', 
-      'drop', 'bearish', 'puts', 'weakness', 'correction',
-      'rekt', 'paper hands', 'fud', 'panic'
-    ];
-    
-    // Comptage mots-clés
     const bullishCount = bullishWords.filter(word => textLower.includes(word)).length;
     const bearishCount = bearishWords.filter(word => textLower.includes(word)).length;
 
-    // Logique de classification combinée
     let signalType = 'NEUTRE';
     let confidence = 50;
     let reasoning = 'IA RoBERTa';
 
-    // Score sentiment Hugging Face (poids 60%)
-    let sentimentWeight = sentiment.score * 40;
-
-    // Score mots-clés (poids 40%)  
-    let keywordWeight = (bullishCount - bearishCount) * 15;
-
-    // Score final combiné
+    const sentimentWeight = sentiment.score * 40;
+    const keywordWeight = (bullishCount - bearishCount) * 15;
     const finalScore = sentimentWeight + keywordWeight;
 
     if (finalScore > 20) {
       signalType = 'ACHAT';
       confidence = Math.min(95, 65 + Math.abs(finalScore));
-      reasoning = `RoBERTa: ${sentiment.score.toFixed(2)} + ${bullishCount} mots bullish`;
+      reasoning = `RoBERTa: ${sentiment.score.toFixed(2)} + ${bullishCount} bullish`;
     } else if (finalScore < -20) {
       signalType = 'VENTE';
       confidence = Math.min(95, 65 + Math.abs(finalScore));
-      reasoning = `RoBERTa: ${sentiment.score.toFixed(2)} + ${bearishCount} mots bearish`;
+      reasoning = `RoBERTa: ${sentiment.score.toFixed(2)} + ${bearishCount} bearish`;
     } else {
       confidence = Math.max(30, 50 - Math.abs(finalScore));
       reasoning = `RoBERTa neutre (${sentiment.score.toFixed(2)})`;
     }
 
-    // Bonus confiance si symboles détectés
     if (symbols.length > 0) {
       confidence += 15;
       reasoning += ` [${symbols.join(', ')}]`;
@@ -149,7 +223,7 @@ class AIService {
   }
 
   fallbackAnalysis(text) {
-    // Analyse basique si Hugging Face échoue
+    console.log('Using fallback analysis...');
     const textLower = text.toLowerCase();
     const symbols = this.extractSymbols(text);
     
@@ -179,3 +253,54 @@ class AIService {
     };
   }
 }
+
+// SERVICE TELEGRAM
+class TelegramService {
+  constructor() {
+    this.botToken = process.env.TELEGRAM_BOT_TOKEN;
+    this.chatId = process.env.TELEGRAM_CHAT_ID;
+    console.log('Telegram service initialized');
+  }
+
+  async sendSignal(signal) {
+    const emoji = signal.signal_type === 'ACHAT' ? '🟢' : 
+                  signal.signal_type === 'VENTE' ? '🔴' : '🟡';
+    
+    let message = `${emoji} ${signal.signal_type} - ${signal.confidence}%\n\n`;
+    
+    if (signal.symbols.length > 0) {
+      message += `💰 Symboles: $${signal.symbols.join(' $')}\n`;
+    }
+    
+    message += `💬 Tweet: ${signal.tweet_text.substring(0, 100)}...\n`;
+    message += `🧠 Analyse: ${signal.reasoning}\n`;
+    message += `🕐 ${new Date().toLocaleString('fr-FR')}`;
+
+    try {
+      await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
+        chat_id: this.chatId,
+        text: message
+      });
+      
+      console.log(`✅ Signal sent: ${signal.signal_type}`);
+    } catch (error) {
+      console.error('Telegram Error:', error.message);
+    }
+  }
+
+  async sendStatus(message) {
+    try {
+      await axios.post(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
+        chat_id: this.chatId,
+        text: `🤖 ${message}`
+      });
+    } catch (error) {
+      console.error('Status failed:', error.message);
+    }
+  }
+}
+
+console.log('🤖 Initializing TradingBot...');
+
+// BOT PRINCIPAL
+class TradingBot

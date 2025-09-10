@@ -18,7 +18,7 @@ console.log('⚙️ Setting up configuration...');
 
 // Configuration
 const CONFIG = {
-  TWITTER_USER: 'Deltaone0',
+  TWITTER_USER: 'DeItaone',
   CHECK_INTERVAL: 5 * 60 * 1000, // 5 minutes  
   CONFIDENCE_THRESHOLD: 60,
   MAX_TWEETS_CACHE: 50
